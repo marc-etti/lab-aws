@@ -41,9 +41,9 @@ CMD ["python", "app.py"]
 ### Test in locale:
 ```bash
 docker build -t lab-ecs-app .
-docker run -p 8080:8080 lab-ecs-app
+docker run -d --rm --name lab-test -p 8080:8080 lab-ecs-app
 curl http://localhost:8080
-docker stop <container_id>
+docker stop lab-test
 ```
 
 ## Fase 2 — Creazione del repository ECR
@@ -139,6 +139,13 @@ Creare il file `trust-policy.json` con il seguente contenuto:
 }
 ```
 
+Creare il ruolo IAM per l'esecuzione dei task ECS:
+```bash
+aws iam create-role \
+  --role-name ecsTaskExecutionRole \
+  --assume-role-policy-document file://trust-policy.json
+```
+
 Creare il log group in CloudWatch per i log dei task:
 ```bash
 aws logs create-log-group --log-group-name /ecs/lab-ecs-task --region $AWS_REGION
@@ -147,13 +154,6 @@ aws logs create-log-group --log-group-name /ecs/lab-ecs-task --region $AWS_REGIO
 Registrare la task definition:
 ```bash
 aws ecs register-task-definition --cli-input-json file://task-definition.json
-```
-
-Creare il ruolo IAM per l'esecuzione dei task ECS:
-```bash
-aws iam create-role \
-  --role-name ecsTaskExecutionRole \
-  --assume-role-policy-document file://trust-policy.json
 ```
 
 A seguire, allegare la policy gestita AmazonECSTaskExecutionRolePolicy al ruolo appena creato:
@@ -254,7 +254,9 @@ export ALB_ARN=$(aws elbv2 describe-load-balancers \
   --names lab-alb --query "LoadBalancers[0].LoadBalancerArn" \
   --output text --region $AWS_REGION)
 echo $ALB_ARN
+```
 
+```bash
 export TG_ARN=$(aws elbv2 describe-target-groups \
   --names lab-tg --query "TargetGroups[0].TargetGroupArn" \
   --output text --region $AWS_REGION)
@@ -284,6 +286,8 @@ aws ecs create-service \
 ```
 
 ## Fase 7 — Verifica
+Attendere qualche minuto che i task diventino RUNNING e healthy, poi verificare che l'applicazione sia raggiungibile tramite l'ALB.
+
 Eseguire il comando per ottenere il DNS dell'ALB e testare l'applicazione:
 ```bash
 export ALB_DNS=$(aws elbv2 describe-load-balancers \
@@ -301,48 +305,190 @@ Osservare i log in CloudWatch (/ecs/lab-ecs-task) e lo stato dei task nella cons
 
 ## Fase 8 — Scaling, Rolling Deployment e Self-Healing
 ### Scaling: da 2 a 4 task
-```bash
-aws ecs update-service \
-  --cluster lab-cluster \
-  --service lab-service \
-  --desired-count 4 \
-  --region $AWS_REGION
-```
+- Aumentare il numero di task desiderati a 4:
+    ```bash
+    aws ecs update-service \
+    --cluster lab-cluster \
+    --service lab-service \
+    --desired-count 4 \
+    --region $AWS_REGION
+    ```
 
-Osservazione del tempo di avvio
+- Osservazione del tempo di avvio
 
-Per misurare quanto ci mette ECS a portare i nuovi task in stato RUNNING e healthy, lancia un piccolo polling in loop:
-```bash
-watch -n 5 'aws ecs describe-services \
-  --cluster lab-cluster \
-  --services lab-service \
-  --region '"$AWS_REGION"' \
-  --query "services[0].{running:runningCount,desired:desiredCount,pending:pendingCount}"'
-```
-In parallelo, verifica quando i nuovi target diventano healthy nel target group:
-```bash
-watch -n 5 'aws elbv2 describe-target-health \
-  --target-group-arn '"$TG_ARN"' \
-  --region '"$AWS_REGION"' \
-  --query "TargetHealthDescriptions[].{IP:Target.Id,State:TargetHealth.State}"'
-```
-Verifica del load balancing su 4 task
-```bash
-for i in {1..10}; do curl -s http://$ALB_DNS | python3 -m json.tool; sleep 1; done
-```
+    Per misurare quanto ci mette ECS a portare i nuovi task in stato RUNNING e healthy, lancia un piccolo polling in loop:
+    ```bash
+    watch -n 5 'aws ecs describe-services \
+    --cluster lab-cluster \
+    --services lab-service \
+    --region '"$AWS_REGION"' \
+    --query "services[0].{running:runningCount,desired:desiredCount,pending:pendingCount}"'
+    ```
+- In parallelo, verifica quando i nuovi target diventano healthy nel target group:
+    ```bash
+    watch -n 5 'aws elbv2 describe-target-health \
+    --target-group-arn '"$TG_ARN"' \
+    --region '"$AWS_REGION"' \
+    --query "TargetHealthDescriptions[].{IP:Target.Id,State:TargetHealth.State}"'
+    ```
+- Verifica del load balancing su 4 task
+    ```bash
+    for i in {1..10}; do curl -s http://$ALB_DNS | python3 -m json.tool; sleep 1; done
+    ```
+    Verranno restituiti 4 hostname diversi, corrispondenti ai 4 task in esecuzione.
 
 ### Rolling deployment senza downtime
+1. Modificare l'applicazione
+    ```py
+    # app.py — modifica il messaggio
+    return jsonify({
+        "message": "Hello from ECS Fargate! (versione 2)",
+        "hostname": socket.gethostname()
+    })
+    ```
+2. Nuovo build e push su ECR
+    ```bash
+    docker build -t lab-ecs-app .
+    ```
+    ```bash
+    docker tag lab-ecs-app:latest \
+    $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/lab-ecs-app:latest
+    ```
+    ```bash
+    docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/lab-ecs-app:latest
+    ```
+    Nota: il tag dell'immagine nella task definition è :latest, ma ECS non rileva automaticamente che l'immagine dietro quel tag è cambiata, poiché un service ECS non fa polling sul registry. Serve forzare esplicitamente un nuovo deployment, ed è proprio questo il motivo per cui esiste il flag --force-new-deployment.
+3. Avviare il rolling deployment
 
+    ```bash
+    aws ecs update-service \
+    --cluster lab-cluster \
+    --service lab-service \
+    --force-new-deployment \
+    --region $AWS_REGION
+    ```
+4. osservare il rollout senza interruzioni
 
+    Mentre il deployment è in corso, lancia in un terminale separato un loop continuo di richieste per dimostrare che il servizio resta sempre disponibile:
+    ```bash
+    while true; do
+    curl -s -o /dev/null -w "%{http_code} - %{time_total}s\n" http://$ALB_DNS
+    sleep 0.5
+    done
+    ```
+    Ci si aspetta di vedere sempre 200, senza mai un errore, anche mentre i vecchi task vengono sostituiti da quelli nuovi.
+
+    In un altro terminale, segui l'evoluzione del deployment:
+    ```bash
+    aws ecs describe-services \
+        --cluster lab-cluster \
+        --services lab-service \
+        --region $AWS_REGION \
+        --query "services[0].deployments"
+    ```
+    Si vedranno due deployment attivi contemporaneamente per qualche decina di secondi: quello PRIMARY (nuovo) che sale gradualmente in runningCount, e quello vecchio che scende fino a 0 e sparisce. Questo è il comportamento di default della strategia rolling update di ECS, regolata dai parametri minimumHealthyPercent (default 100%) e maximumPercent (default 200%): ECS avvia prima i task nuovi e solo dopo che sono healthy rimuove quelli vecchi, garantendo che la capacità non scenda mai sotto il 100% di quella desiderata.
+5. Verificare che la nuova versione sia live
+    ```bash
+    curl http://$ALB_DNS
+    ```
+    Deve comparire il nuovo messaggio "versione 2"
+
+### Self-healing
+1. Individuare l'ID di un task in esecuzione
+    ```bash
+    aws ecs list-tasks \
+    --cluster lab-cluster \
+    --service-name lab-service \
+    --region $AWS_REGION
+    ```
+    Copia uno degli ARN restituiti:
+    ```bash
+    export TASK_ARN=<uno-degli-arn-ottenuti>
+    ```
+2. Terminarlo manualmente
+    ```bash
+    aws ecs stop-task \
+    --cluster lab-cluster \
+    --task $TASK_ARN \
+    --reason "Test di self-healing per il laboratorio" \
+    --region $AWS_REGION
+    ```
+3. Osservare la reazione di ECS
+    ```bash
+    watch -n 3 'aws ecs describe-services \
+    --cluster lab-cluster \
+    --services lab-service \
+    --region '"$AWS_REGION"' \
+    --query "services[0].{running:runningCount,desired:desiredCount,pending:pendingCount,events:events[0:3]}"'
+    ```
+Ci si aspetta di vedere per qualche secondo running: 3 (il task appena fermato), seguito quasi immediatamente da un nuovo task in pending e poi di nuovo running: 4. Negli events comparirà un messaggio esplicito, tipo "has started 1 tasks".
 
 ## Fase 9 — Pulizia
-```bash
-aws ecs update-service --cluster lab-cluster --service lab-service --desired-count 0
-aws ecs delete-service --cluster lab-cluster --service lab-service --force
-aws elbv2 delete-load-balancer --load-balancer-arn $ALB_ARN
-aws elbv2 delete-target-group --target-group-arn $TG_ARN
-aws ecs delete-cluster --cluster-name lab-cluster
-aws ecr delete-repository --repository-name lab-ecs-app --force
-aws logs delete-log-group --log-group-name /ecs/lab-ecs-task
-```
+
+0. Ripristinare le variabili di ambiente nel caso il terminale sia stato chiuso:
+    ```bash
+    export AWS_REGION=eu-central-1
+    export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    export VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" \
+    --query "Vpcs[0].VpcId" --output text --region $AWS_REGION)
+    export ALB_ARN=$(aws elbv2 describe-load-balancers --names lab-alb \
+    --query "LoadBalancers[0].LoadBalancerArn" --output text --region $AWS_REGION)
+    export TG_ARN=$(aws elbv2 describe-target-groups --names lab-tg \
+    --query "TargetGroups[0].TargetGroupArn" --output text --region $AWS_REGION)
+    export SG_ALB=$(aws ec2 describe-security-groups \
+    --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=lab-alb-sg" \
+    --query "SecurityGroups[0].GroupId" --output text --region $AWS_REGION)
+    export SG_TASK=$(aws ec2 describe-security-groups \
+    --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=lab-task-sg" \
+    --query "SecurityGroups[0].GroupId" --output text --region $AWS_REGION)
+    ```
+1. Service ECS e attesa dello stop dei task
+    ```
+    aws ecs delete-service --cluster lab-cluster --service lab-service --force --region $AWS_REGION
+    aws ecs wait services-inactive --cluster lab-cluster --services lab-service --region $AWS_REGION
+    ```
+2. ALB (il listener viene eliminato insieme all'ALB), poi target group
+    ```
+    aws elbv2 delete-load-balancer --load-balancer-arn $ALB_ARN --region $AWS_REGION
+    aws elbv2 wait load-balancers-deleted --load-balancer-arns $ALB_ARN --region $AWS_REGION
+    ```
+    ```
+    aws elbv2 delete-target-group --target-group-arn $TG_ARN --region $AWS_REGION
+    ```
+3. Cluster e tutte le revisioni della task definition
+    ```
+    aws ecs delete-cluster --cluster lab-cluster --region $AWS_REGION
+    ```
+    ```
+    for TD in $(aws ecs list-task-definitions --family-prefix lab-ecs-task \
+    --query "taskDefinitionArns[]" --output text --region $AWS_REGION); do
+    aws ecs deregister-task-definition --task-definition $TD --region $AWS_REGION > /dev/null
+    done
+    ```
+4. Security group: prima quello dei task, poi quello dell'ALB
+    ```
+    aws ec2 delete-security-group --group-id $SG_TASK --region $AWS_REGION
+    aws ec2 delete-security-group --group-id $SG_ALB --region $AWS_REGION
+    ```
+
+5. Repository ECR e log group
+    ```
+    aws ecr delete-repository --repository-name lab-ecs-app --force --region $AWS_REGION
+    aws logs delete-log-group --log-group-name /ecs/lab-ecs-task --region $AWS_REGION
+    ```
+
+6. Ruolo IAM (solo se creato in questo laboratorio)
+    ```
+    aws iam detach-role-policy --role-name ecsTaskExecutionRole \
+      --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+    aws iam delete-role --role-name ecsTaskExecutionRole
+    ```
+
+7. Pulizia locale
+    ```
+    docker rmi lab-ecs-app:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/lab-ecs-app:latest
+    docker logout $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+    ```
+
+
 
