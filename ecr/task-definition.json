@@ -1,0 +1,28 @@
+{
+  "family": "lab-ecs-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::051388700026:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "lab-ecs-app",
+      "image": "051388700026.dkr.ecr.eu-central-1.amazonaws.com/lab-ecs-app:latest",
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/lab-ecs-task",
+          "awslogs-region": "eu-central-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
