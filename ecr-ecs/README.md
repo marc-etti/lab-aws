@@ -1,4 +1,4 @@
-# Amazon ECR tutorial
+# Amazon ECR & ECS tutorial
 
 ## Prerequisiti
 - Account AWS con crediti promozionali (100 USD)
