@@ -2,9 +2,9 @@
 
 ## Contenuti
 
-- [ECR - Elastic Container Registry](ecr/README.md)
+- [ECR & ECS](ecr-ecs/README.md)
 
-- [ECS - Elastic Container Service](ecs/README.md)
+- [Amazon SQS](amazon-sqs/README.md)
 
 - [Bedrock](bedrock/README.md)
 
