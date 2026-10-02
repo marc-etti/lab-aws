@@ -27,3 +27,28 @@ Per configurare l'AWS CLI, seguire i passaggi seguenti:
 - O in alternativa usare `aws login` se si utilizza AWS SSO per autenticarsi.
 
 - Verificare la configurazione eseguendo il comando `aws sts get-caller-identity` per confermare che le credenziali siano corrette e che si stia utilizzando l'account AWS desiderato.
+
+## Configurazione EB CLI (Elastic Beanstalk Command Line Interface)
+
+Seguire le istruzioni ufficiali al link: [Installazione EB CLI](https://github.com/aws/aws-elastic-beanstalk-cli-setup)
+```
+git clone https://github.com/aws/aws-elastic-beanstalk-cli-setup.git
+```
+```
+python ./aws-elastic-beanstalk-cli-setup/scripts/ebcli_installer.py
+```
+Dopo l'installazione, verificare che la EB CLI sia correttamente installata eseguendo il comando `eb --version`.
+In caso contrario, assicurarsi che il percorso di installazione della EB CLI sia incluso nella variabile d'ambiente PATH.
+
+In caso di problemi con la libreria `botocore`, eseguire il seguente comando per installare le dipendenze necessarie:
+```
+"$HOME/.ebcli-virtual-env/bin/python" -m pip install "botocore[crt]"
+```
+
+## Installazione Session Manager Plugin
+
+Per accedere alle istanze EC2 tramite AWS Systems Manager Session Manager, è necessario installare il plugin Session Manager.
+```
+curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o session-manager-plugin.deb
+sudo dpkg -i session-manager-plugin.deb
+```
