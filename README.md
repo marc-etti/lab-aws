@@ -2,7 +2,13 @@
 
 ## Contenuti
 
-- [ECR & ECS](ecr-ecs/README.md)
+- [ECR & ECS - App Python](ecr-ecs/README.md)
+
+- [ECR & ECS - App PHP](ecr-ecs-AppPHP/README.md)
+
+- [Elastic Beanstalk](Elastic-Beanstalk/README.md)
+
+- [Lambda](lambda/README.md)
 
 - [Amazon SQS](amazon-sqs/README.md)
 
