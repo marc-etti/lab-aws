@@ -5,7 +5,7 @@
 - AWS CLI installata e configurata con le credenziali
 - Docker installato e funzionante
 
-## Fase 1 — Applicazione di esempio Applicazione di esempio
+## Fase 1 — Applicazione di esempio
 
 Creare una piccola API REST (es. Flask/Python) che risponde su / con un messaggio JSON, utile per verificare il deploy.
 
