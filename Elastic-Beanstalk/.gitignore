@@ -1,0 +1,9 @@
+.env
+eb-service-trust.json
+eb-ec2-trust.json
+.db-pass
+
+# Elastic Beanstalk Files
+.elasticbeanstalk/*
+!.elasticbeanstalk/*.cfg.yml
+!.elasticbeanstalk/*.global.yml

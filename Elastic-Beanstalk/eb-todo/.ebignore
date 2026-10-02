@@ -1,0 +1,4 @@
+.git
+*.md
+lb-settings.json
+.db-pass
