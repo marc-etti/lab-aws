@@ -1,0 +1,7 @@
+.env
+*.bak
+secret-policy.json
+trust.json
+lifecycle-policy.json
+taskdef-init.json
+taskdef.json
