@@ -1,0 +1,14 @@
+trust-policy.json
+evento-importi.json
+risposta.json
+risposta-async.json
+out.json
+
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
