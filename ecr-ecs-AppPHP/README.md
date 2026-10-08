@@ -3,37 +3,40 @@
 ## Fase 1 - Creazione di un'applicazione PHP + MariaDB e containerizzazione con Docker
 
 1. Creare il file con le credenziali locali
-    ```
+    ```bash
     cp .env.example .env
     ```
 
 2. Build e avvio
-    ```
+    ```bash
     docker compose up -d --build
     ```
 
 3. Controllo stato e log
-    ```
+    ```bash
     docker compose ps
     docker compose logs -f web
     ```
 
-4. Test
-    ```
+4. Controlla che l'applicazione sia raggiungibile con:
+    ```bash
     curl http://localhost:8080/health.php
+    ```
+5. Controlla che il database sia raggiungibile con:
+    ```bash
     curl http://localhost:8080/health.php?deep=1
     ```
     poi da browser: http://localhost:8080
 
-5. Verifica persistenza dei dati
-    ```
+6. Verifica persistenza dei dati
+    ```bash
     docker compose down
     docker compose up -d
     ```
     i dati restano nel volume
 
-6. Pulizia completa (cancella anche il volume)
-    ```
+7. Pulizia completa (cancella anche il volume)
+    ```bash
     docker compose down -v
     ```
 
@@ -62,9 +65,9 @@ aws ecr create-repository \
     --image-tag-mutability IMMUTABLE \
     --encryption-configuration encryptionType=AES256
 ```
-- scanOnPush=true: scansione delle vulnerabilità a ogni push
-- IMMUTABLE: un tag già pubblicato non può essere sovrascritto (quindi 1.0 resta sempre la stessa immagine; niente tag latest riutilizzato)
-- AES256: cifrazione a riposo gestita da AWS (è già il default)
+- `scanOnPush=true`: scansione delle vulnerabilità a ogni push
+- `IMMUTABLE`: un tag già pubblicato non può essere sovrascritto (quindi 1.0 resta sempre la stessa immagine; niente tag latest riutilizzato)
+- `AES256`: cifrazione a riposo gestita da AWS (è già il default)
 
 Verifica:
 ```bash
@@ -73,8 +76,9 @@ aws ecr describe-repositories --repository-names $REPO_NAME --region $AWS_REGION
 
 ### 4. Lifecycle policy (pulizia automatica):
     
-Salva come `lifecycle-policy.json`:
-```json
+Creiamo il file `lifecycle-policy.json`:
+```bash
+cat > lifecycle-policy.json <<'EOF'
 {
 "rules": [
     {
@@ -100,8 +104,9 @@ Salva come `lifecycle-policy.json`:
     }
     ]
 }
+EOF
 ```
-Lifecycle policy permette di eliminare automaticamente le immagini non taggate dopo 1 giorno e di mantenere solo le ultime 10 immagini per ogni tag.
+La **lifecycle policy**  permette di eliminare automaticamente le immagini non taggate dopo 1 giorno e di mantenere solo le ultime 10 immagini per ogni tag.
 
 ### 5. Applicazione della lifecycle policy
 ```bash
@@ -131,7 +136,7 @@ docker push ${ECR_URI}/${REPO_NAME}:${IMAGE_TAG}
 
 ### 8. Verifica del contenuto del repository ECR
 
-Elenco immagini
+Elenco immagini:
 ```bash
 aws ecr describe-images \
     --repository-name $REPO_NAME \
@@ -140,7 +145,7 @@ aws ecr describe-images \
     --output table
 ```
 
-Controllo stato scansione delle vulnerabilità (puo richiedere qualche minuto dopo il push)
+Controllo stato scansione delle vulnerabilità (puo richiedere qualche minuto dopo il push):
 ```bash
 aws ecr describe-image-scan-findings \
     --repository-name $REPO_NAME \
@@ -160,6 +165,7 @@ docker pull ${ECR_URI}/${REPO_NAME}:${IMAGE_TAG}
 ```
 
 ## Fase 3: dal repository ECR al servizio in esecuzione con ECS Fargate
+Una volta che l'immagine è stata pubblicata su ECR, possiamo creare un cluster ECS Fargate e un servizio che esegue l'applicazione PHP.
 
 ### 1. Variabili e rete (VPC di default)
 ```bash
@@ -171,6 +177,7 @@ export SERVICE=todo-service
 export VPC_ID=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true \
 --query 'Vpcs[0].VpcId' --output text)
 ```
+In questo esempio useremo la VPC di default, che ha già 3 subnet pubbliche in 3 availability zone diverse.
 ```bash
 SUBNETS=$(aws ec2 describe-subnets \
 --filters Name=vpc-id,Values=$VPC_ID Name=default-for-az,Values=true \
@@ -184,6 +191,12 @@ echo $SUBNET_3
 ```
 
 ### 2. Security group (ALB, task, DB)
+Creiamo 3 security group:
+- `todo-alb-sg`: per l'ALB, permette traffico in ingresso sulla porta 80 da internet
+- `todo-task-sg`: per i task Fargate, permette traffico in ingresso
+  sulla porta 80 solo dall'ALB
+- `todo-db-sg`: per il database RDS, permette traffico in ingresso
+  sulla porta 3306 solo dai task Fargate
 ```bash
 ALB_SG=$(aws ec2 create-security-group --group-name todo-alb-sg \
 --description "ALB todo" --vpc-id $VPC_ID --query GroupId --output text)
@@ -206,6 +219,7 @@ echo $DB_SG
 ```
 
 ### 3. Segreto e database RDS MariaDB
+Creiamo un segreto per la password del database e lo salviamo in `AWS Secrets Manager`.
 ```bash
 export DB_PASSWORD=$(openssl rand -hex 16)
 
@@ -241,7 +255,7 @@ aws rds create-db-instance \
 
 ### 4. Ruolo di esecuzione IAM
 
-Creazione del ruolo IAM per ECS Fargate, che permette di fare pull dell'immagine da ECR, scrivere i log su CloudWatch e leggere il segreto della password del database.
+Definizione del ruolo IAM per ECS Fargate, che permette di fare pull dell'immagine da ECR, scrivere i log su CloudWatch e leggere il segreto della password del database.
 ```bash
 cat > trust.json <<'EOF'
 {
@@ -254,17 +268,18 @@ cat > trust.json <<'EOF'
 }
 EOF
 ```
+Creazione del ruolo IAM
 ```bash
 aws iam create-role --role-name todoTaskExecutionRole \
 --assume-role-policy-document file://trust.json
 ```
-Pull da ECR + scrittura log
+Attach del policy al ruolo
 ```bash
 aws iam attach-role-policy --role-name todoTaskExecutionRole \
 --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 ```
 
-Lettura del solo segreto della password
+Definiamo una policy inline per permettere al ruolo di leggere il segreto della password del database.
 ```bash
 cat > secret-policy.json <<EOF
 {
@@ -277,10 +292,12 @@ cat > secret-policy.json <<EOF
 }
 EOF
 ```
+Applichiamo la policy al ruolo
 ```bash
 aws iam put-role-policy --role-name todoTaskExecutionRole \
     --policy-name read-db-secret --policy-document file://secret-policy.json
 ```
+Esportiamo l'ARN del ruolo per usarlo nella task definition
 ```bash
 export EXEC_ROLE_ARN=arn:aws:iam::${AWS_ACCOUNT_ID}:role/todoTaskExecutionRole
 echo $EXEC_ROLE_ARN
@@ -294,6 +311,18 @@ aws logs put-retention-policy --log-group-name /ecs/php-todo --retention-in-days
 aws ecs create-cluster --cluster-name $CLUSTER
 ```
 ### 6. Application Load Balancer
+Creazione dell'Application Load Balancer con parametri:
+- `internet-facing`: accessibile da internet
+- `--subnets $SUBNET_1 $SUBNET_2`: almeno 2 subnet in availability zone diverse per avere alta disponibilità
+- `--security-groups $ALB_SG`: il security group creato prima per l'ALB
+
+Creazione del target group per i task Fargate con parametri:
+- `--protocol HTTP --port 80`: il protocollo e la porta su cui i task ascoltano
+- `--target-type ip`: i task Fargate hanno un IP privato, quindi il target type è `ip`
+- `--health-check-path /health.php`: path per il controllo dello stato dei task
+- `--health-check-interval-seconds 15`: intervallo tra i controlli di salute
+- `--healthy-threshold-count 2`: numero di controlli di salute consecutivi per considerare il target sano
+
 ```bash
 export ALB_ARN=$(aws elbv2 create-load-balancer --name todo-alb \
     --type application --scheme internet-facing \
@@ -307,32 +336,44 @@ export TG_ARN=$(aws elbv2 create-target-group --name todo-tg \
     --healthy-threshold-count 2 \
     --query 'TargetGroups[0].TargetGroupArn' --output text)
 ```
-Sticky session (le sessioni PHP sono su file locale) + deregistrazione rapida
+
+Applichiamo le seguenti impostazioni al target group:
+- `stickiness.enabled=true`: abilita la stickiness ovvero la possibilità di mantenere lo stesso target per le richieste dello stesso client
+- `stickiness.type=lb_cookie`: tipo di stickiness basato su cookie del load balancer
+- `stickiness.lb_cookie.duration_seconds=3600`: durata della stickiness in secondi (1 ora)
+- `deregistration_delay.timeout_seconds=30`: tempo di attesa prima di deregistrare un target dal target group (30 secondi)
 ```bash
 aws elbv2 modify-target-group-attributes --target-group-arn $TG_ARN --attributes \
     Key=stickiness.enabled,Value=true \
     Key=stickiness.type,Value=lb_cookie \
     Key=stickiness.lb_cookie.duration_seconds,Value=3600 \
     Key=deregistration_delay.timeout_seconds,Value=30
-
+```
+Creiamo il listener per l'ALB sulla porta 80, che inoltra le richieste al target group creato prima.
+```bash
 aws elbv2 create-listener --load-balancer-arn $ALB_ARN \
     --protocol HTTP --port 80 \
     --default-actions Type=forward,TargetGroupArn=$TG_ARN
-
+```
+Controlliamo il DNS dell'ALB per poterlo usare nei test.
+```bash
 export ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN \
     --query 'LoadBalancers[0].DNSName' --output text)
 echo $ALB_DNS
 ```
 
 ### 7. Attesa di RDS e creazione delle tabelle
+Aspettiamo che l'istanza RDS sia disponibile prima di eseguire lo script di inizializzazione del database.
 ```bash
 aws rds wait db-instance-available --db-instance-identifier todo-db
 ```
+Controlliamo l'endpoint del database.
 ```bash
 export DB_ENDPOINT=$(aws rds describe-db-instances --db-instance-identifier todo-db \
     --query 'DBInstances[0].Endpoint.Address' --output text)
 echo $DB_ENDPOINT
 ```
+Creiamo un task ECS Fargate temporaneo per eseguire lo script di inizializzazione del database. La query `base64 < db/init.sql | tr -d '\n'` converte il contenuto del file `db/init.sql` in base64 e rimuove i caratteri di nuova linea, così possiamo passarlo come variabile d'ambiente al container.
 ```bash
 export INIT_SQL_B64=$(base64 < db/init.sql | tr -d '\n')
 
@@ -369,6 +410,7 @@ cat > taskdef-init.json <<EOF
 }
 EOF
 ```
+Registriamo la task definition e avviamo il task di inizializzazione del database. Poi aspettiamo che il task termini e controlliamo il codice di uscita (0 = successo).
 ```bash
 aws ecs register-task-definition --cli-input-json file://taskdef-init.json
 
@@ -427,6 +469,7 @@ EOF
 aws ecs register-task-definition --cli-input-json file://taskdef.json
 ```
 ### 9. Creazione del service
+Creiamo il service ECS Fargate con 2 task, collegato all'ALB e al target group creati prima. Il service ha un **circuit breaker** abilitato, che annulla automaticamente un deploy che non riesce a diventare sano.
 ```bash
 aws ecs create-service \
     --cluster $CLUSTER \

@@ -27,13 +27,16 @@
 ## 2. Configurazione di Elastic Beanstalk
 
 ### 1. Ruoli IAM
+Definizione del service role per EB (permette a EB di gestire le risorse AWS):
 ```bash
-# Service role
 cat > eb-service-trust.json <<'EOF'
 {"Version":"2012-10-17","Statement":[{"Effect":"Allow",
 "Principal":{"Service":"elasticbeanstalk.amazonaws.com"},"Action":"sts:AssumeRole"}]}
 EOF
 ```
+Creazione del ruolo e associazione delle policy necessarie:
+- `AWSElasticBeanstalkEnhancedHealth`: consente a EB di raccogliere metriche e informazioni sullo stato dell'ambiente.
+- `AWSElasticBeanstalkManagedUpdatesCustomerRolePolicy`: consente a EB di gestire gli aggiornamenti automatici delle istanze EC2 e del software installato.
 ```bash
 aws iam create-role --role-name aws-elasticbeanstalk-service-role \
     --assume-role-policy-document file://eb-service-trust.json
@@ -42,13 +45,17 @@ aws iam attach-role-policy --role-name aws-elasticbeanstalk-service-role \
 aws iam attach-role-policy --role-name aws-elasticbeanstalk-service-role \
     --policy-arn arn:aws:iam::aws:policy/AWSElasticBeanstalkManagedUpdatesCustomerRolePolicy
 ```
-Instance profile per le EC2
+Definizione del ruolo per le istanze EC2 (permette alle istanze di accedere ad altre risorse AWS come SSM, RDS, ecc.):
 ```bash
 cat > eb-ec2-trust.json <<'EOF'
 {"Version":"2012-10-17","Statement":[{"Effect":"Allow",
 "Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}
 EOF
 ```
+Creazione del ruolo e associazione delle policy necessarie:
+- `AWSElasticBeanstalkWebTier`: consente alle istanze EC2 di accedere alle risorse necessarie per eseguire applicazioni web.
+- `AmazonSSMManagedInstanceCore`: consente alle istanze EC2 di essere gestite tramite AWS Systems Manager
+
 ```bash
 aws iam create-role --role-name aws-elasticbeanstalk-ec2-role \
     --assume-role-policy-document file://eb-ec2-trust.json
@@ -62,12 +69,14 @@ aws iam add-role-to-instance-profile \
     --role-name aws-elasticbeanstalk-ec2-role
 ```
 ### 2. Rete e RDS MariaDB (disaccoppiato)
+Variabili d'ambiente per la regione, il nome dell'applicazione e dell'ambiente EB:
 ```bash
 export AWS_REGION=eu-central-1
 export AWS_DEFAULT_REGION=$AWS_REGION
 export APP_NAME=todo-app
 export ENV_NAME=todo-env
 ```
+Creazione del VPC e delle subnet:
 ```bash
 export VPC_ID=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true \
     --query 'Vpcs[0].VpcId' --output text)
@@ -76,7 +85,7 @@ read -r SUBNET_1 SUBNET_2 _ <<< "$(aws ec2 describe-subnets \
     --filters Name=vpc-id,Values=$VPC_ID Name=default-for-az,Values=true \
     --query 'Subnets[].SubnetId' --output text)"
 ```
-Security group del database (nessuna regola in ingresso, per ora)
+Creazione del security group per il database e generazione di una password casuale per l'utente "todo":
 ```bash
 export DB_SG=$(aws ec2 create-security-group --group-name todo-eb-db-sg \
     --description "RDS per EB todo" --vpc-id $VPC_ID --query GroupId --output text)
@@ -84,6 +93,7 @@ export DB_SG=$(aws ec2 create-security-group --group-name todo-eb-db-sg \
 export DB_PASSWORD=$(openssl rand -hex 16)
 echo "$DB_PASSWORD" > .db-pass        # in .ebignore: serve se si chiude il terminale
 ```
+Creazione del gruppo di subnet per RDS e dell'istanza MariaDB:
 ```bash
 aws rds create-db-subnet-group --db-subnet-group-name todo-eb-subnets \
     --db-subnet-group-description "Subnet todo EB" --subnet-ids $SUBNET_1 $SUBNET_2
@@ -101,6 +111,7 @@ aws rds create-db-instance \
     --no-publicly-accessible --no-multi-az \
     --backup-retention-period 0
 ```
+L'istanza RDS richiede qualche minuto per essere disponibile.
 ### 3. Inizializzazione EB e primo ambiente
 
 Verifica prima la piattaforma PHP disponibile (cambia nel tempo):
@@ -110,59 +121,65 @@ aws elasticbeanstalk list-available-solution-stacks \
     --output text | tr '\t' '\n'
 ```
 
-Poi, dalla cartella eb-todo/:
+Poi, dalla cartella dell'applicazione `eb-todo/`:
 ```bash
 cd eb-todo
 ```
+Esporta la piattaforma corretta per EB, fare riferimento alla lista del comando precedente. In questo esempio, la piattaforma è `64bit Amazon Linux 2023 v4.13.9 running PHP 8.3`:
 ```bash
-export EB_PLATFORM="64bit Amazon Linux 2023 v4.13.9 running PHP 8.3"   # adatta all'elenco sopra
+export EB_PLATFORM="64bit Amazon Linux 2023 v4.13.9 running PHP 8.3"
 ```
+Inizializzazione di EB:
 ```bash
 eb init $APP_NAME --platform "$EB_PLATFORM" --region $AWS_REGION
 ```
 - Se chiede di configurare SSH rispondi "n": si usa SSM Session Manager
 
 Creazione dell'ambiente EB (disaccoppiato dal DB, con hook postdeploy per inizializzare lo schema):
+- `--single` crea una sola istanza con IP pubblico, senza load balancer (più economico). La creazione richiede 5-8 minuti. Intanto mostra in console lo stack CloudFormation awseb-... con le risorse create.
 ```bash
 eb create $ENV_NAME --single -i t3.micro \
     --instance_profile aws-elasticbeanstalk-ec2-role \
     --service-role aws-elasticbeanstalk-service-role
 ```
-- `--single` crea una sola istanza con IP pubblico, senza load balancer (più economico). La creazione richiede 5-8 minuti. Intanto mostra in console lo stack CloudFormation awseb-... con le risorse create.
+Controlla lo stato e la salute dell'ambiente:
 ```bash
 eb status
 eb health
 ```
+Ottenere l'URL dell'ambiente::
 ```bash
 export EB_URL=$(aws elasticbeanstalk describe-environments --environment-names $ENV_NAME \
     --query 'Environments[0].CNAME' --output text)
 echo "URL ambiente: http://$EB_URL"
 ```
+Test della pagina di health:
 ```bash
 curl http://$EB_URL/health.php
 ```
 A questo punto health.php risponde, ma login.php dà errore perché il database non è ancora collegato. L'hook ha stampato "Nessun database configurato".
 
 ### 4. Collegare l'ambiente al database
+Aspettiamo che l'istanza RDS sia disponibile prima di eseguire lo script di inizializzazione del database:
 ```bash
 aws rds wait db-instance-available --db-instance-identifier todo-eb-db
 export DB_ENDPOINT=$(aws rds describe-db-instances --db-instance-identifier todo-eb-db \
     --query 'DBInstances[0].Endpoint.Address' --output text)
 ```
-Security group delle istanze EB
+Ottenere l'ID dell'istanza EB e il security group associato:
 ```bash
 export INSTANCE_ID=$(aws elasticbeanstalk describe-environment-resources \
     --environment-name $ENV_NAME --query 'EnvironmentResources.Instances[0].Id' --output text)
 export INSTANCE_SG=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID \
     --query 'Reservations[0].Instances[0].SecurityGroups[0].GroupId' --output text)
 ```
-Il DB accetta 3306 solo dalle istanze EB
+Imponiamo la regola per permettere al security group dell'istanza EB di accedere al database MariaDB sulla porta 3306:
 ```bash
 aws ec2 authorize-security-group-ingress --group-id $DB_SG \
     --protocol tcp --port 3306 --source-group $INSTANCE_SG
 ```
 
-Environment properties
+Impostiamo le variabili d'ambiente per l'applicazione EB, che saranno lette da `src/config.php`:
 ```bash
 eb setenv DB_HOST=$DB_ENDPOINT DB_PORT=3306 DB_NAME=todoapp DB_USER=todo DB_PASSWORD=$DB_PASSWORD
 ```
@@ -189,32 +206,32 @@ eb open
 Registra un utente dal browser, crea qualche attività, esci e rientra.
 
 ### 5.  Accesso all'istanza e troubleshooting
+Accesso all'istanza EB tramite SSM Session Manager (richiede il plugin Session Manager) oppure, se è stato configurato una key pair: `eb ssh`:
 ```bash
-aws ssm start-session --target $INSTANCE_ID     # richiede il plugin Session Manager
+aws ssm start-session --target $INSTANCE_ID
 ```
-oppure, se hai configurato una key pair: `eb ssh`
-
+Una volta dentro, puoi controllare i log di EB e del web server Apache:
 ```bash
-# Dentro l'istanza
 sudo tail -n 50 /var/log/eb-hooks.log
 sudo tail -n 50 /var/log/httpd/error_log
 ls /var/app/current
 ```
 ### 6.  Aggiornamento e rollback
     
-Modifica un testo in `public/index.php`, (se fossimo in un repository git `git add -A && git commit -m "v1.1"`) poi deploy:
+Modifica un testo in `public/index.php` poi esegui il deploy:
 ```bash
 eb deploy --label v1.1
 ```
+Apri il browser per vedere la nuova versione:
 ```bash
 eb open
 ```
-Versioni disponibili
+Per visualizzare le versioni disponibili:
 ```bash
 aws elasticbeanstalk describe-application-versions --application-name $APP_NAME \
     --query 'ApplicationVersions[].VersionLabel'
 ```
-Rollback alla versione precedente
+Per tornare alla versione precedente, esegui il rollback con il label della versione precedente:
 ```bash
 eb deploy --version <label-precedente>  # es. v1.0
 ```
