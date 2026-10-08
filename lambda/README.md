@@ -12,6 +12,7 @@ lambda-lab/
 ```
 
 ## 1. Build del progetto
+Spostarsi nella cartella del progetto e compilare il codice con Maven:
 ```bash
 cd lambda-lab
 ```
@@ -20,7 +21,8 @@ mvn clean package
 ```
 Output: `target/lambda-lab-1.0.0.jar`
 
-## 2. Deploy con AWS CLI
+## 2. Configurazione AWS CLI
+Assicurarsi di avere configurato correttamente la AWS CLI con le credenziali e la regione desiderata. Impostare le variabili d'ambiente per la regione e l'account ID:
 ```bash
 export AWS_REGION=eu-central-1
 export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -40,7 +42,9 @@ cat > trust-policy.json <<'EOF'
 }
 EOF
 ```
-Questo file definisce la policy di trust per il ruolo, consentendo al servizio Lambda di assumere il ruolo. Una volta creato il file, eseguire i comandi per creare il ruolo e allegare la policy di esecuzione base per Lambda:
+Questo file definisce la policy di trust per il ruolo, consentendo al servizio Lambda di assumere il ruolo.
+
+Una volta creato il file, eseguire i comandi per creare il ruolo e allegare la policy di esecuzione base per Lambda:
 ```bash
 aws iam create-role \
   --role-name lambda-lab-role \
@@ -81,7 +85,7 @@ aws lambda create-function \
 ```
 La funzione `lab-report-schedulato` è ora disponibile per essere invocata. Si occupa di generare un report schedulato e può simulare un errore se la variabile d'ambiente `SIMULA_ERRORE` è impostata a `true`.
 
-## 6. Test
+## 6. File di test
 Creare un file `evento-importi.json`:
 ```bash
 cat > evento-importi.json <<'EOF'
@@ -93,7 +97,7 @@ EOF
 ```
 Il file `evento-importi.json` contiene un array di importi e un'aliquota IVA. Questo file sarà utilizzato come payload per testare la funzione Lambda `lab-importi`.
 
-### Invocazione sincrona:
+## 7. Invocazione sincrona:
 Il comando seguente invoca la funzione Lambda `lab-importi` in modalità sincrona, passando il payload dal file `evento-importi.json`. La risposta viene salvata nel file `risposta.json` e i log vengono visualizzati in tempo reale.
 ```bash
 aws lambda invoke \
@@ -108,7 +112,7 @@ cat risposta.json
 ```
 Risposta attesa: `{"numeroImporti":3,"imponibile":35.75,"iva":7.87,"totale":43.62,"requestId":"..."}`
 
-### Invocazione asincrona
+## 8. Invocazione asincrona
 Il comando seguente invoca la funzione Lambda `lab-importi` in modalità asincrona, passando il payload dal file `evento-importi.json`.
 ```bash
 aws lambda invoke \
@@ -125,7 +129,9 @@ Log in tempo reale:
 ```bash
 aws logs tail /aws/lambda/lab-importi --follow
 ```
-### Retry e gestione errori
+La modalità asincrona è utile per eseguire funzioni che richiedono più tempo o che non necessitano di una risposta immediata. Il risultato dell'esecuzione può essere recuperato dai log.
+
+## 9. Retry e gestione errori
 
 Si può attivare l'errore simulato e osservare i tentativi nei log:
 ```bash
@@ -155,13 +161,14 @@ aws lambda put-function-event-invoke-config \
 ```
 A questo punto, se si invoca nuovamente la funzione con errore simulato, nei log compaiono solo 2 esecuzioni.
 
-## 7. Schedulazione con EventBridge (alternativa al crontab)
+## 10. Schedulazione con EventBridge (alternativa al crontab)
 ### 1. Regola schedulata: ogni 5 minuti
 ```bash
 aws events put-rule \
   --name lab-report-ogni-5-minuti \
   --schedule-expression "rate(5 minutes)"
 ```
+Viene creata una regola di EventBridge che attiva la funzione `lab-report-schedulato` ogni 5 minuti.
 
 ### 2. Permesso a EventBridge di invocare la funzione
 ```bash
@@ -172,15 +179,17 @@ aws lambda add-permission \
   --principal events.amazonaws.com \
   --source-arn arn:aws:events:${AWS_REGION}:${ACCOUNT_ID}:rule/lab-report-ogni-5-minuti
 ```
+Viene aggiunto un permesso alla funzione Lambda `lab-report-schedulato` per consentire a EventBridge di invocarla.
 
-### 3. Collegamento regola → funzione
+### 3. Collegamento regola -> funzione
 ```bash
 aws events put-targets \
   --rule lab-report-ogni-5-minuti \
   --targets "Id"="1","Arn"="arn:aws:lambda:${AWS_REGION}:${ACCOUNT_ID}:function:lab-report-schedulato"
 ```
+Viene collegata la regola `lab-report-ogni-5-minuti` alla funzione `lab-report-schedulato`. Adesso la funzione verrà invocata automaticamente ogni 5 minuti.
 
-## 8. Pulizia
+## 11. Pulizia
 ```bash
 aws events remove-targets --rule lab-report-ogni-5-minuti --ids 1
 aws events delete-rule --name lab-report-ogni-5-minuti
