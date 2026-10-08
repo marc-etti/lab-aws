@@ -261,7 +261,7 @@ eb deploy --version <label-precedente>  # es. v1.0
     ```bash
     aws elasticbeanstalk delete-application --application-name $APP_NAME --terminate-env-by-force
     ```
-    bucket `elasticbeanstalk-<regione>-<account>`: controlla e svuota se vuoi
+    per controllare che non ci siano più bundle ZIP in S3:
     ```bash
     aws s3 ls | grep elasticbeanstalk
     ```
