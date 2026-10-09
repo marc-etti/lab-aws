@@ -390,7 +390,7 @@ cat > taskdef-init.json <<EOF
     "image": "mariadb:11",
     "essential": true,
     "entryPoint": ["sh", "-c"],
-    "command": ["echo \$INIT_SQL_B64 | base64 -d | mariadb --skip-ssl -h \$DB_HOST -u \$DB_USER -p\$DB_PASSWORD \$DB_NAME"],
+    "command": ["echo \$INIT_SQL_B64 | base64 -d | mariadb --ssl --skip-ssl-verify-server-cert -h \$DB_HOST -u \$DB_USER -p\$DB_PASSWORD \$DB_NAME"],
     "environment": [
     {"name": "DB_HOST", "value": "$DB_ENDPOINT"},
     {"name": "DB_USER", "value": "todo"},
